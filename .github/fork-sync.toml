@@ -12,8 +12,8 @@ test_commands = [
 ]
 
 [review]
-# Instructions that agents load as-is, the CLI's entry point, and the MCP server manifest:
-# any change needs a person.
-paths_watched = ["skills/*", ".agents/*", "AGENTS.md", "scripts/rea.mjs", "server.json"]
+# Instructions that agents load as-is, and the CLI's entry point: any change needs a person.
+# (server.json is upstream's MCP-registry listing; it changes every release and nothing here reads it.)
+paths_watched = ["skills/*", ".agents/*", "AGENTS.md", "scripts/rea.mjs"]
 # The bridges drive debuggers, decompilers and proxies against local processes.
 trust_critical = ["bridge/*", "src/composition/*", "scripts/*"]
