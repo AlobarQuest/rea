@@ -4,7 +4,12 @@ upstream = "morluto/rea"
 ecosystem = "npm"
 release_tag_pattern = '^rea-agents-(\d+\.\d+\.\d+)$'
 build_commands = ["npm run compile", "npm run artifacts:skills"]
-test_commands = ["npm run test:fast", "node scripts/rea.mjs --version"]
+# Upstream's source tests, minus the one that reads upstream's own .github/ workflow, which the
+# fork removes (rea's test runner refuses --exclude, so it is skipped by name).
+test_commands = [
+    "npm run test:fast -- -t '^(?!.*runs only default-branch code on the fixed self-hosted environment)'",
+    "node scripts/rea.mjs --version",
+]
 
 [review]
 # Instructions that agents load as-is, the CLI's entry point, and the MCP server manifest:
