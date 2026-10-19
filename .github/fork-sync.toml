@@ -1,0 +1,19 @@
+# AlobarQuest/rea: the reverse-engineering CLI and MCP server installed on Devon's Mac by the
+# tool-installer lane (`NpmInstall`). Build commands match the installer's, so CI builds what lands.
+upstream = "morluto/rea"
+ecosystem = "npm"
+release_tag_pattern = '^rea-agents-(\d+\.\d+\.\d+)$'
+build_commands = ["npm run compile", "npm run artifacts:skills"]
+# Upstream's source tests, minus the one that reads upstream's own .github/ workflow, which the
+# fork removes (rea's test runner refuses --exclude, so it is skipped by name).
+test_commands = [
+    "npm run test:fast -- -t '^(?!.*runs only default-branch code on the fixed self-hosted environment)'",
+    "node scripts/rea.mjs --version",
+]
+
+[review]
+# Instructions that agents load as-is, the CLI's entry point, and the MCP server manifest:
+# any change needs a person.
+paths_watched = ["skills/*", ".agents/*", "AGENTS.md", "scripts/rea.mjs", "server.json"]
+# The bridges drive debuggers, decompilers and proxies against local processes.
+trust_critical = ["bridge/*", "src/composition/*", "scripts/*"]
