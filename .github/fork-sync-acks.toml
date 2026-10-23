@@ -1,2 +1,8 @@
 # Findings a person has read and accepted, by fingerprint (fork-sync review).
 # One [[ack]] per finding: fingerprint, by, date, reason. See onboarding-a-fork.md.
+
+[[ack]]
+fingerprint = "665f221c33a03782"
+by = "devon (approved in session; recorded by Claude)"
+date = "2026-10-23"
+reason = "rea on main. GHSA-587h-7wmj-h5pm vite 8.3.2: launch-editor existence check bypassable on Windows; a dev-server path on a platform the operator machine isn't. Upstream dependency advisory; reported, not fixed in the lane (ADR-0056 amendment 1)."
