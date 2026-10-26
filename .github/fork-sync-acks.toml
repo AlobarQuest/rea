@@ -6,3 +6,87 @@ fingerprint = "665f221c33a03782"
 by = "devon (approved in session; recorded by Claude)"
 date = "2026-10-23"
 reason = "rea on main. GHSA-587h-7wmj-h5pm vite 8.3.2: launch-editor existence check bypassable on Windows; a dev-server path on a platform the operator machine isn't. Upstream dependency advisory; reported, not fixed in the lane (ADR-0056 amendment 1)."
+
+[[ack]]
+fingerprint = "52d5d9b69a653bba"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/rea-changelog-update/SKILL.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "9e04b42e1abd4de0"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/reverse-engineer-anything/SKILL.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "68e9f5dd309d9bd8"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/reverse-engineer-anything/references/android-applications.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "c176708d5611279e"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/reverse-engineer-anything/references/connection-and-recovery.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "e206c0df227655a7"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/reverse-engineer-anything/references/environments.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "81fd523333e996f6"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/reverse-engineer-anything/references/evidence-workflows.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "0b3b86709cc63ca3"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/reverse-engineer-anything/references/javascript-applications.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "2b2f3c8cab261aa3"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/reverse-engineer-anything/references/native-and-artifacts.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "d255b4afdff97453"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path .agents/skills/reverse-engineer-anything/references/runtime-observation.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "483240f05b29d134"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path AGENTS.md: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "ed1bda1e372b456a"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 shell-script install.sh: a root shell script, typically run by hand to install. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "bdffd9bf2a64e8ba"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 watched-path scripts/rea.mjs: a watched path. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "0fe6352d8a6d90ad"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 npm-lifecycle-file scripts/prepare.mjs: a file an install-time script runs changed. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
+
+[[ack]]
+fingerprint = "1709fc7a387d6368"
+by = "devon (approved in session 2026-10-26; recorded by Claude)"
+date = 2026-10-26
+reason = "AlobarQuest/rea Upstream sync: rea-agents-6.8.0 too-large : the diff is 41181891 characters, over max_diff_chars (400000); it was not reviewed. Read the held paths' diff: install.sh only raises the Node floor; prepare.mjs patches release-please only in source checkouts; rea.mjs adds loopback-only, unauthenticated 'mcp --http'; skills add debugger/instrumentation and session-recording guidance; the 41 MB is text (locales, fixtures, JSON), no archives or executables."
