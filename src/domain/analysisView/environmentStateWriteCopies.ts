@@ -1,5 +1,6 @@
 import type { JsonValue } from "../jsonValue.js";
 import {
+  ownMember,
   pointerTokens,
   scalarText,
   type JsonObject,
@@ -7,7 +8,12 @@ import {
 } from "./environmentStateRules.js";
 import { GENERATED } from "./environmentStateWriteGenerated.js";
 import type { FieldRule } from "./environmentStateWriteRules.js";
-import { delimitedOffsets, readClock } from "./environmentStateWriteValues.js";
+import {
+  delimitedOffsets,
+  joinsAfter,
+  joinsBefore,
+  readClock,
+} from "./environmentStateWriteValues.js";
 
 /** Shorter body strings are too common to show that a field copied one. */
 export const COPY_MIN_LENGTH = 8;
@@ -18,10 +24,10 @@ export const templateRule = (
   field: string,
   sources: readonly FieldRule[],
 ): FieldRule | undefined => {
-  const value = entity[field];
+  const value = ownMember(entity, field);
   if (typeof value !== "string") return undefined;
   for (const rule of sources) {
-    const token = scalarText(entity[rule.field]);
+    const token = scalarText(ownMember(entity, rule.field));
     const generated = GENERATED.has(rule.rule);
     if (
       rule.field !== field &&
@@ -51,12 +57,6 @@ export const storedMembers = (
     }),
   );
 
-/** A letter or digit, which joins a token to the text around it. */
-const WORD = /[\p{L}\p{N}]/u;
-
-const joins = (character: string | undefined): boolean =>
-  character !== undefined && WORD.test(character);
-
 /**
  * The texts that hold each token delimited, read in one pass per text: from each start after a
  * delimiter, each length a token has that a delimiter ends, rather than a search per token and text.
@@ -71,10 +71,10 @@ const holdersOf = (
   const holders = new Map<string, Set<string>>();
   for (const [field, text] of texts)
     for (let at = 0; at < text.length; at += 1) {
-      if (joins(text[at - 1])) continue;
+      if (joinsBefore(text, at)) continue;
       for (const length of lengths) {
         if (at + length > text.length) break;
-        if (joins(text[at + length])) continue;
+        if (joinsAfter(text, at + length)) continue;
         const token = text.slice(at, at + length);
         if (tokens.has(token))
           holders.set(token, (holders.get(token) ?? new Set()).add(field));
@@ -95,7 +95,7 @@ export const strandedCopies = (
     ),
   );
   const sources = rules.flatMap((rule) => {
-    const token = scalarText(entity[rule.field]);
+    const token = scalarText(ownMember(entity, rule.field));
     return (rule.rule === "copy" || rule.rule === "echo") &&
       token !== undefined &&
       token.length >= COPY_MIN_LENGTH
@@ -105,7 +105,7 @@ export const strandedCopies = (
   const holders = holdersOf(
     new Map(
       texts.flatMap((field) => {
-        const value = entity[field];
+        const value = ownMember(entity, field);
         return typeof value === "string" ? [[field, value] as const] : [];
       }),
     ),
@@ -187,7 +187,7 @@ export const referencedMembers = (
     if (referenced.length === 0) continue;
     // A reference repeated under another reference's name is the same entity named twice, not its text.
     const repeats = (field: string): boolean => {
-      const value = entity[field];
+      const value = ownMember(entity, field);
       return (
         typeof value === "string" &&
         value.length >= COPY_MIN_LENGTH &&
@@ -226,7 +226,7 @@ export const instantMembers = (
   constants: readonly string[],
 ): Set<string> => {
   const instants = constants.flatMap((field) => {
-    const at = instantOf(entity[field]);
+    const at = instantOf(ownMember(entity, field));
     return at === undefined ? [] : [{ field, at }];
   });
   return new Set(

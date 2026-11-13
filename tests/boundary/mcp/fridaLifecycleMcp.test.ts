@@ -21,13 +21,16 @@ import type {
 } from "../../../src/application/frida/FridaInstrumentationPort.js";
 import type { EvidenceWriter } from "../../../src/application/investigation/InvestigationRecordPort.js";
 import { toolContract } from "../../../src/contracts/toolContracts.js";
-import { expandToolAvailability } from "../../../src/contracts/toolOutputSchemaPrimitives.js";
+import {
+  expandToolAvailability,
+  toolAvailabilityInventory,
+} from "../../../src/contracts/toolOutputSchemaPrimitives.js";
 import type { AnalysisPartialObservation } from "../../../src/domain/analysisErrorBase.js";
 import { AnalysisCancelledError } from "../../../src/domain/analysisErrorCore.js";
 import { EvidenceIntegrityError } from "../../../src/domain/evidenceErrors.js";
 import { evidenceBundleSchema } from "../../../src/domain/evidenceBundle.js";
 import { fridaSessionStatusSchema } from "../../../src/domain/fridaSessionStatus.js";
-import type { Evidence } from "../../../src/domain/evidence.js";
+import { parseEvidence, type Evidence } from "../../../src/domain/evidence.js";
 import { jsonObjectSchema } from "../../../src/domain/jsonValue.js";
 import { nativeCallPartialObservationSchema } from "../../../src/domain/native/nativeCallPartialObservation.js";
 import { err, ok } from "../../../src/domain/result.js";
@@ -254,6 +257,59 @@ const connectedFixture = async () => {
   return { ...native, manager, session, server, client, start, load };
 };
 
+it.each(["start_frida_session", "instrument_with_frida"] as const)(
+  "selects capture retention through the public %s contract before observation",
+  async (operation) => {
+    const fixture = await connectedFixture();
+    const description = "d".repeat(40_000);
+    fixture.controls.message = {
+      type: "send",
+      payload: "observed",
+      description,
+    };
+    const result = await fixture.client.callTool({
+      name: operation,
+      arguments: {
+        mode: "attach",
+        pid: 512,
+        capture_limits: { message_text_bytes: 50_000 },
+        ...(operation === "instrument_with_frida"
+          ? {
+              source_kind: "inline",
+              source: "send('observed')",
+              duration_ms: 0,
+            }
+          : {}),
+      },
+    });
+    expect(result.isError).not.toBe(true);
+    let observed = result;
+    if (operation === "start_frida_session") {
+      const started = toolContract("start_frida_session").outputSchema.parse(
+        result.structuredContent,
+      );
+      expect(started.capture_limits?.message_text_bytes).toBe(50_000);
+      observed = await fixture.load(started.session_id, "send('observed')");
+    }
+    expect(observed.isError).not.toBe(true);
+    const evidence = parseEvidence(observed.structuredContent);
+    const facts = jsonObjectSchema.parse(evidence.normalized_result);
+    expect(facts.capture_limits).toMatchObject({
+      message_text_bytes: 50_000,
+      session_bytes: 16_777_216,
+    });
+    expect(facts.messages).toEqual([expect.objectContaining({ description })]);
+    expect(JSON.stringify(facts.messages)).not.toContain(
+      '"description_truncated":true',
+    );
+    if (operation === "instrument_with_frida") {
+      expect(evidence.parameters.capture_limits).toEqual({
+        message_text_bytes: 50_000,
+      });
+    }
+  },
+);
+
 it.each(["attached", "during-resume", "after-resume"] as const)(
   "preserves observed detachment through resume settlement: %s",
   async (timing) => {
@@ -303,12 +359,14 @@ it("retains detached state and resume evidence when remote cleanup needs retry",
   ).toBe(true);
   const inventory = await fixture.client.callTool({
     name: "binary_session",
-    arguments: {},
+    arguments: { detail: "complete" },
   });
   const availability = expandToolAvailability(
-    toolContract("binary_session").outputSchema.parse(
-      inventory.structuredContent,
-    ).result.tool_availability,
+    toolAvailabilityInventory.parse(
+      toolContract("binary_session").outputSchema.parse(
+        inventory.structuredContent,
+      ).result.tool_availability,
+    ),
   );
   expect(
     availability.find((tool) => tool.name === "close_frida_session"),
@@ -617,13 +675,15 @@ it("declares non-destructive session mutation when status retains Evidence", asy
   ).toMatchObject({ readOnlyHint: false, destructiveHint: false });
   const inventory = await client.callTool({
     name: "binary_session",
-    arguments: {},
+    arguments: { detail: "complete" },
   });
   expect(inventory.isError).not.toBe(true);
   const available = expandToolAvailability(
-    toolContract("binary_session").outputSchema.parse(
-      inventory.structuredContent,
-    ).result.tool_availability,
+    toolAvailabilityInventory.parse(
+      toolContract("binary_session").outputSchema.parse(
+        inventory.structuredContent,
+      ).result.tool_availability,
+    ),
   );
   expect(
     available.find((tool) => tool.name === "frida_session_status"),
@@ -798,7 +858,11 @@ it("preserves inline Frida partial Evidence when its writer rejects it", async (
   expect(attempts).toHaveLength(1);
   expect(error.code).toBe("cancelled");
   const details = jsonObjectSchema.parse(error.details);
-  expect(details.partial_observation).toEqual(attempts[0]);
+  expect(details.partial_observation).toEqual({
+    kind: "inline-evidence",
+    retention: "unknown",
+    evidence: attempts[0],
+  });
 });
 
 it.each([

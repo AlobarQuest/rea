@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CdpCaptureCompleteness } from "./CdpCaptureCompleteness.js";
+import type { CdpContextFrameClaim } from "./CdpScriptContextFacts.js";
 import {
   captureFrames,
   inspectCdpElectronPage,
@@ -227,6 +228,52 @@ afterEach(async () => {
   );
 });
 
+/** Raw lifecycle messages exercised by the final file-validation race. */
+const documentIdentityEvent = (
+  kind: string,
+  mainUrl: string,
+  childUrl: string,
+): { readonly event: CdpEvent; readonly isMain: boolean } => {
+  const isMain =
+    kind.startsWith("late-main") ||
+    kind === "duplicate-main" ||
+    kind === "duplicate-initial";
+  if (kind === "attached-child-with-id-alias")
+    return {
+      isMain,
+      event: {
+        method: "Page.frameAttached",
+        params: { frameId: "child", parentFrameId: "main", id: "main" },
+      },
+    };
+  const id = isMain ? "main" : "child";
+  const malformedAlias = kind === "malformed-child-id-alias";
+  return {
+    isMain,
+    event: {
+      method: "Page.frameNavigated",
+      params: {
+        frame: {
+          id: malformedAlias ? null : id,
+          ...(malformedAlias ? { frameId: "child" } : {}),
+          ...(isMain ? {} : { parentId: "main" }),
+          url: isMain ? mainUrl : childUrl,
+          ...(kind === "unknown-child"
+            ? {}
+            : {
+                loaderId:
+                  kind.startsWith("late-main") ||
+                  kind === "replacement-child" ||
+                  malformedAlias
+                    ? "replacement-loader"
+                    : `loader-${id}`,
+              }),
+        },
+      },
+    },
+  };
+};
+
 it.each([
   "late-main",
   "late-main-progress",
@@ -235,6 +282,8 @@ it.each([
   "duplicate-child",
   "replacement-child",
   "unknown-child",
+  "malformed-child-id-alias",
+  "attached-child-with-id-alias",
 ])(
   "preserves document identity through final file validation: %s",
   async (kind) => {
@@ -256,30 +305,8 @@ it.each([
     let reads = 0,
       fired = false;
     const inject = () => {
-      const isMain =
-        kind.startsWith("late-main") ||
-        kind === "duplicate-main" ||
-        kind === "duplicate-initial";
-      listener({
-        method: "Page.frameNavigated",
-        params: {
-          frame: {
-            id: isMain ? "main" : "child",
-            ...(isMain ? {} : { parentId: "main" }),
-            url: isMain ? mainUrl : childUrl,
-            ...(kind === "unknown-child"
-              ? {}
-              : {
-                  loaderId:
-                    kind.startsWith("late-main") || kind === "replacement-child"
-                      ? "replacement-loader"
-                      : isMain
-                        ? "loader-main"
-                        : "loader-child",
-                }),
-          },
-        },
-      });
+      const { event, isMain } = documentIdentityEvent(kind, mainUrl, childUrl);
+      listener(event);
       if (!isMain) {
         listener({
           method: "Runtime.executionContextCreated",
@@ -364,7 +391,7 @@ it.each([
     else {
       const captured = await result;
       expect(fired).toBe(true);
-      if (kind.startsWith("duplicate"))
+      if (kind.startsWith("duplicate") || kind === "malformed-child-id-alias")
         expect(captured.completeness.attach_limited_sections).not.toContain(
           "frames",
         );
@@ -373,7 +400,10 @@ it.each([
           expect.objectContaining({
             cdp_hash: "observed",
             frame_id: "child",
-            frame_scope: kind === "duplicate-child" ? "authorized" : "unknown",
+            frame_scope:
+              kind === "duplicate-child" || kind === "malformed-child-id-alias"
+                ? "authorized"
+                : "unknown",
           }),
         );
     }
@@ -467,7 +497,7 @@ describe("Electron frame capture", () => {
     const scriptPath = join(root, "app.js");
     await writeFile(scriptPath, "export const app = true;");
     const scripts: ElectronScriptDraft[] = [];
-    const executionContextFrames = new Map<string, string>();
+    const executionContextFrames = new Map<string, CdpContextFrameClaim>();
     const retention = { bytes: 2 };
     const completeness = new CdpCaptureCompleteness();
     const ingest = (method: string, params: unknown): void =>
@@ -804,6 +834,202 @@ it.each([
       expect(
         captured.completeness.attach_limited_sections.includes("frames"),
       ).toBe(changed);
+    }
+  },
+);
+
+it.each([2, 3])(
+  "refuses a tree-first main frame identity replacement at read %s",
+  async (stage) => {
+    const root = await mkdtemp(join(tmpdir(), "rea-electron-root-identity-"));
+    temporary.push(root);
+    const main = join(root, "main.html");
+    await writeFile(main, "main");
+    const mainUrl = pathToFileURL(main).href;
+    let reads = 0;
+    const connection = {
+      onEvent: () => () => {},
+      send: async (method: string) => {
+        if (method === "Page.getFrameTree") {
+          reads += 1;
+          return {
+            frameTree: {
+              frame: {
+                id: reads >= stage ? "replacement-main" : "initial-main",
+                url: mainUrl,
+                loaderId: "same-url-document",
+              },
+            },
+          };
+        }
+        if (method === "Page.getResourceTree")
+          return { frameTree: { resources: [] } };
+        if (method === "DOMSnapshot.captureSnapshot")
+          return { strings: [], documents: [] };
+        if (method === "Target.getTargets") return { targetInfos: [] };
+        return {};
+      },
+    } as unknown as CdpConnection;
+    await expect(
+      inspectRaceConnection(connection, mainUrl),
+    ).rejects.toMatchObject({
+      reason: "target_changed",
+    });
+  },
+);
+
+it.each([
+  { stage: 1, loader: undefined },
+  { stage: 1, loader: "" },
+  { stage: 2, loader: undefined },
+  { stage: 2, loader: "" },
+  { stage: 3, loader: undefined },
+  { stage: 3, loader: "" },
+  { stage: 0, loader: undefined },
+])(
+  "retains uncertainty when the main loader is missing at read $stage",
+  async ({ stage, loader }) => {
+    const root = await mkdtemp(join(tmpdir(), "rea-electron-missing-loader-"));
+    temporary.push(root);
+    const main = join(root, "main.html");
+    const child = join(root, "child.html");
+    await Promise.all([writeFile(main, "main"), writeFile(child, "child")]);
+    const mainUrl = pathToFileURL(main).href;
+    const childUrl = pathToFileURL(child).href;
+    let reads = 0;
+    let listener: (event: CdpEvent) => void = () => {};
+    const emitScript = (hash: string, id: number, frameId: string) => {
+      listener({
+        method: "Runtime.executionContextCreated",
+        params: { context: { id, auxData: { frameId } } },
+      });
+      listener({
+        method: "Debugger.scriptParsed",
+        params: { scriptId: hash, url: mainUrl, executionContextId: id, hash },
+      });
+    };
+    const connection = {
+      onEvent: (value: typeof listener) => {
+        listener = value;
+        return () => {};
+      },
+      send: async (method: string) => {
+        if (method === "Page.getFrameTree") {
+          reads++;
+          return {
+            frameTree: {
+              childFrames: [
+                {
+                  frame: {
+                    id: "child",
+                    parentId: "main",
+                    url: childUrl,
+                    loaderId: "loader-child",
+                  },
+                },
+              ],
+              frame: {
+                id: "main",
+                url: mainUrl,
+                ...(reads === stage
+                  ? loader === undefined
+                    ? {}
+                    : { loaderId: loader }
+                  : { loaderId: "loader-main" }),
+              },
+            },
+          };
+        }
+        if (method === "Debugger.enable") {
+          emitScript("before", 7, "main");
+          emitScript("child-before", 9, "child");
+        }
+        if (method === "Page.getResourceTree") {
+          emitScript("after", 8, "main");
+          emitScript("child-after", 10, "child");
+          return { frameTree: { resources: [] } };
+        }
+        if (method === "DOMSnapshot.captureSnapshot")
+          return { strings: [], documents: [] };
+        if (method === "Target.getTargets") return { targetInfos: [] };
+        return {};
+      },
+    } as unknown as CdpConnection;
+    const result = await inspectRaceConnection(connection, mainUrl);
+    for (const section of ["frames", "scripts", "workers"] as const)
+      expect(
+        result.completeness.attach_limited_sections.includes(section),
+      ).toBe(stage !== 0);
+    expect(result.scripts.items).toContainEqual(
+      expect.objectContaining({
+        cdp_hash: "before",
+        frame_scope: stage === 1 ? "unknown" : "authorized",
+      }),
+    );
+    expect(result.scripts.items).toContainEqual(
+      expect.objectContaining({
+        cdp_hash: "after",
+        frame_scope: stage === 1 || stage === 2 ? "unknown" : "authorized",
+      }),
+    );
+    expect(result.scripts.items).toContainEqual(
+      expect.objectContaining({
+        cdp_hash: "child-before",
+        frame_scope: stage === 1 ? "unknown" : "authorized",
+      }),
+    );
+    expect(result.scripts.items).toContainEqual(
+      expect.objectContaining({
+        cdp_hash: "child-after",
+        frame_scope: stage === 1 || stage === 2 ? "unknown" : "authorized",
+      }),
+    );
+  },
+);
+
+it.each([
+  { loaders: ["loader-a", undefined, "loader-b"], changed: true },
+  { loaders: ["loader-a", undefined, "loader-a"], changed: false },
+  { loaders: [undefined, undefined, "loader-b"], changed: false },
+])(
+  "compares later root identity with the last proven loader: $loaders",
+  async ({ loaders, changed }) => {
+    const root = await mkdtemp(join(tmpdir(), "rea-electron-loader-history-"));
+    temporary.push(root);
+    const main = join(root, "main.html");
+    await writeFile(main, "main");
+    const mainUrl = pathToFileURL(main).href;
+    let reads = 0;
+    const connection = {
+      onEvent: () => () => {},
+      send: async (method: string) => {
+        if (method === "Page.getFrameTree") {
+          const loaderId = loaders[reads++];
+          return {
+            frameTree: {
+              frame: {
+                id: "main",
+                url: mainUrl,
+                ...(loaderId === undefined ? {} : { loaderId }),
+              },
+            },
+          };
+        }
+        if (method === "Page.getResourceTree")
+          return { frameTree: { resources: [] } };
+        if (method === "DOMSnapshot.captureSnapshot")
+          return { strings: [], documents: [] };
+        if (method === "Target.getTargets") return { targetInfos: [] };
+        return {};
+      },
+    } as unknown as CdpConnection;
+    const result = inspectRaceConnection(connection, mainUrl);
+    if (changed)
+      await expect(result).rejects.toMatchObject({ reason: "target_changed" });
+    else {
+      const value = await result;
+      if (loaders[0] !== undefined)
+        expect(value.completeness.attach_limited_sections).toContain("frames");
     }
   },
 );

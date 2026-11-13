@@ -1,11 +1,12 @@
 import { z } from "zod";
 
 import {
+  objcImplementationClassName,
   nativeMetadataEvidenceSchema,
   nativeMetadataLocationSchema,
   type ObjcSwiftMetadata,
 } from "./objcSwiftMetadata.js";
-import { jsonValueSchema } from "../jsonValue.js";
+import { jsonObjectSchema } from "../jsonValue.js";
 
 /** Entity kinds shared by decoded Interface Builder archives and native code. */
 export const nativeInvestigationNodeKindSchema = z.enum([
@@ -44,7 +45,7 @@ export const nativeInvestigationNodeSchema = z.strictObject({
   kind: nativeInvestigationNodeKindSchema,
   name: z.string().min(1),
   location: nativeMetadataLocationSchema.nullable(),
-  attributes: z.record(z.string(), jsonValueSchema),
+  attributes: jsonObjectSchema,
   evidence: z.array(nativeMetadataEvidenceSchema),
 });
 
@@ -153,8 +154,17 @@ export const nativeInvestigationTraceSchema = z.strictObject({
   edges: z.array(nativeInvestigationEdgeSchema),
   unresolved: z.array(nativeInvestigationEdgeSchema),
   reached_depth: z.int().nonnegative(),
-  truncated: z.boolean(),
-  reason: z.string().nullable(),
+  truncated: z
+    .boolean()
+    .describe(
+      "The supplied graph was truncated or a local trace bound stopped traversal; source omissions remain unknown.",
+    ),
+  reason: z
+    .string()
+    .nullable()
+    .describe(
+      "Local trace cutoff or missing start when observed; source_graph_truncated otherwise identifies an already truncated source. Source truncation is also retained in limitations when a local reason takes precedence.",
+    ),
   coverage: z.array(nativeInvestigationCoverageSchema),
   limitations: z.array(z.string().min(1)),
 });
@@ -172,6 +182,11 @@ export const traceNativeInvestigationGraph = (
     readonly limits?: Partial<NativeInvestigationTraceLimits>;
   },
 ): NativeInvestigationTrace => {
+  const sourceLimitations = graph.truncated
+    ? [
+        "The supplied graph was truncated; relationships omitted from that source remain unknown.",
+      ]
+    : [];
   const start = graph.nodes.find(({ id }) => id === input.start);
   if (start === undefined)
     return {
@@ -183,10 +198,11 @@ export const traceNativeInvestigationGraph = (
       edges: [],
       unresolved: [],
       reached_depth: 0,
-      truncated: false,
+      truncated: graph.truncated,
       reason: "start_node_missing",
       coverage: graph.coverage,
       limitations: [
+        ...sourceLimitations,
         "The requested start node is absent from the supplied graph.",
       ],
     };
@@ -269,10 +285,11 @@ export const traceNativeInvestigationGraph = (
     edges: [...selectedEdges.values()],
     unresolved: [...unresolved.values()],
     reached_depth: reachedDepth,
-    truncated,
-    reason,
+    truncated: truncated || graph.truncated,
+    reason: reason ?? (graph.truncated ? "source_graph_truncated" : null),
     coverage: graph.coverage,
     limitations: [
+      ...sourceLimitations,
       "Static analysis does not prove that an authored UI action is reachable or executed at runtime.",
       "Provider call graphs may omit unresolved indirect dispatch.",
     ],
@@ -351,7 +368,7 @@ export const joinInterfaceBuilderDispatch = (
         candidate.method_type === "instance" &&
         candidate.selector === selector &&
         (className === null ||
-          candidate.class_name.replace(/\([^)]*\)$/u, "") === className),
+          objcImplementationClassName(candidate) === className),
     );
     const implementation = candidates.length === 1 ? candidates[0] : undefined;
     const edgeId = `dispatch:${selectorNodeId}:${className ?? owner?.id ?? "unknown"}:${selector}`;
@@ -390,7 +407,8 @@ export const joinInterfaceBuilderDispatch = (
         name: `${implementation.class_name} ${selector}`,
         location: {
           address: implementation.implementation_address,
-          file_offset: implementation.location.file_offset,
+          // The implementation location identifies the method record, not its code.
+          file_offset: null,
         },
         attributes: {
           class_name: implementation.class_name,

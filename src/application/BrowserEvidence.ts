@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ProviderIdentity } from "./AnalysisProvider.js";
 import {
   createEvidence,
@@ -31,12 +32,21 @@ import type {
   BrowserCaptureComparisonInput,
 } from "../domain/browserCaptureComparison.js";
 import { commitBrowserScenarioNormalization } from "../domain/browserScenarioNormalization.js";
+import { digestCanonicalValue } from "../domain/canonicalDigest.js";
 import type {
   CaptureWebScreenshotInput,
   CompareWebScreenshotsInput,
   WebScreenshot,
   WebScreenshotDiff,
 } from "../domain/webScreenshot.js";
+
+import type { JsonValue } from "../domain/jsonValue.js";
+
+/** The own JSON source and the facts admitted by its named output contract. */
+export interface BrowserEvidenceReport {
+  readonly source: JsonValue;
+  readonly facts: BrowserEvidenceResult;
+}
 
 type BrowserEvidenceInput =
   | ListBrowserTargetsInput
@@ -76,18 +86,33 @@ const isBundleAcquisition = (
 export const createBrowserEvidence = (
   operation: BrowserEvidenceOperation,
   input: BrowserEvidenceInput,
-  result: BrowserEvidenceResult,
+  report: BrowserEvidenceReport,
   provider: ProviderIdentity,
 ): Evidence => {
+  const result = report.facts;
   const acquisition = isBundleAcquisition(result);
   const observed = acquisition ? result.inspection : result;
+  const comparison =
+    operation === "compare_web_captures" ||
+    operation === "compare_web_screenshots";
   return createEvidence(undefined, provider, {
     predicateType: browserPredicate(operation),
     operation,
-    parameters: browserParameters(input, result),
+    parameters: {
+      ...browserParameters(input, result),
+      ...(comparison
+        ? {
+            comparison_input_sha256: digestCanonicalValue(
+              input,
+              "Browser comparison input",
+            ),
+          }
+        : {}),
+    },
     result,
-    confidence: "observed",
-    authority: "external-service",
+    rawResult: isDeepStrictEqual(report.source, result) ? null : report.source,
+    confidence: comparison ? "derived" : "observed",
+    authority: comparison ? "analyst-inference" : "external-service",
     environment:
       "browser" in observed
         ? {
@@ -150,6 +175,10 @@ const browserParameters = (
         : "target_id" in input && observedOrigin !== undefined
           ? [observedOrigin]
           : [],
+    ...("discovery_timeout_ms" in input &&
+    input.discovery_timeout_ms !== undefined
+      ? { discovery_timeout_ms: input.discovery_timeout_ms }
+      : {}),
     ...("command_timeout_ms" in input && input.command_timeout_ms !== undefined
       ? { command_timeout_ms: input.command_timeout_ms }
       : {}),
@@ -177,6 +206,12 @@ const browserParameters = (
     ...("fetch_source_maps" in input
       ? {
           fetch_source_maps: input.fetch_source_maps,
+          ...(input.source_map_limits === undefined
+            ? {}
+            : { source_map_limits: input.source_map_limits }),
+          ...(input.semantic_precision === undefined
+            ? {}
+            : { semantic_precision: input.semantic_precision }),
           ...(input.max_heap_mb === undefined
             ? {}
             : { max_heap_mb: input.max_heap_mb }),

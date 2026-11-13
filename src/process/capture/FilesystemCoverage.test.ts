@@ -1,3 +1,4 @@
+import { createTestProcessCaptureResourceScope } from "../../../tests/fixtures/processCaptureResourceScope.js";
 import { requirePermissionDenial } from "../../../tests/fixtures/permissionDenial.js";
 import {
   chmod,
@@ -173,7 +174,7 @@ it.skipIf(process.platform === "win32")(
       expect(
         snapshot.files.find(({ path }) => path === "root_0:readable.txt")
           ?.sha256,
-      ).not.toBeNull();
+      ).toEqual(expect.any(String));
       expect(
         snapshot.files.find(({ path }) => path === "root_0:unreadable.txt"),
       ).toMatchObject({ type: "file", size: 17, sha256: null });
@@ -576,6 +577,7 @@ it("allocates the observer directory before baseline and excludes it before entr
       createTemporaryRoot: () => mkdtemp(join(root, "rea-process-")),
       cleanup: (path) => rm(path, { recursive: true, force: true }),
     },
+    createTestProcessCaptureResourceScope(),
   );
   try {
     const after = await snapshotRoots(scenario, undefined, prepared.before, {
@@ -630,5 +632,92 @@ it.skipIf(process.platform === "win32")(
       "root_0:other/observer-run/target.txt",
     ]);
     expect(snapshot.coverage.enumeration_truncated).toBe(false);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "preserves non-UTF-8 symlink target bytes through snapshot effects and schema parsing",
+  async () => {
+    const { processFilesystemSnapshotSchema } =
+      await import("../../domain/process/processCapture.js");
+    const root = await createTestTempDirectory("rea-fs-symlink-bytes-");
+    const path = join(root, "link");
+    const first = Buffer.from([0x61, 0xff]);
+    const second = Buffer.from([0x61, 0xfe]);
+    await symlink(first, path);
+    const scenario = processScenarioSchema.parse({
+      executable: process.execPath,
+      filesystem_observation_paths: [root],
+    });
+    const before = processFilesystemSnapshotSchema.parse(
+      await snapshotRoots(scenario),
+    );
+    await rm(path);
+    await symlink(second, path);
+    const after = processFilesystemSnapshotSchema.parse(
+      await snapshotRoots(scenario),
+    );
+    const link = before.files.find((file) => file.type === "symlink");
+    expect(link).toMatchObject({
+      symlink_target: null,
+      symlink_target_hex: "61ff",
+    });
+    expect(
+      classifyFilesystemEffects(before, after).find(
+        ({ path }) => path === "root_0:link",
+      )?.status,
+    ).toBe("modified");
+    expect(
+      classifyFilesystemEffects(before, before).find(
+        ({ path }) => path === "root_0:link",
+      )?.status,
+    ).toBe("unchanged");
+    expect(
+      processFilesystemSnapshotSchema.safeParse({
+        ...before,
+        files: [{ ...link, symlink_target: "a�" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      processFilesystemSnapshotSchema.safeParse({
+        ...before,
+        files: [{ ...link, symlink_target_hex: "f" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      processFilesystemSnapshotSchema.safeParse({
+        ...before,
+        files: [{ ...link, symlink_target_hex: undefined }],
+      }).success,
+    ).toBe(false);
+    const textOnlyAdmissions: boolean[] = [];
+    for (const target of ["target", "a�"]) {
+      await rm(path);
+      await symlink(target, path);
+      const valid = processFilesystemSnapshotSchema.parse(
+        await snapshotRoots(scenario),
+      );
+      const observed = valid.files.find((file) => file.type === "symlink");
+      expect(observed).toMatchObject({
+        symlink_target: target,
+        symlink_target_hex: Buffer.from(target).toString("hex"),
+      });
+      expect(
+        classifyFilesystemEffects(valid, valid).find(
+          ({ path }) => path === "root_0:link",
+        )?.status,
+      ).toBe("unchanged");
+      textOnlyAdmissions.push(
+        processFilesystemSnapshotSchema.safeParse({
+          ...valid,
+          files: valid.files.map((file) =>
+            file.type === "symlink"
+              ? { ...file, symlink_target_hex: undefined }
+              : file,
+          ),
+        }).success,
+      );
+    }
+    expect(textOnlyAdmissions).toEqual([false, false]);
   },
 );

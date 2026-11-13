@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 
 import { AnalysisCleanupLease } from "../artifacts/AnalysisCleanupLease.js";
 import { fileHandleMatchesBytes } from "../filesystem/fileHandleMatchesBytes.js";
+import { absoluteCallerPath } from "../filesystem/callerPath.js";
 import { OwnedFileHandle } from "../filesystem/OwnedFileHandle.js";
 import { OwnedStagedOutput } from "../filesystem/OwnedStagedOutput.js";
 import {
@@ -63,6 +64,8 @@ export class ClientConfigurationWriteError extends Error {
 export interface ClientConfigurationSelection {
   readonly requestedPath: string;
   readonly state: Stats | undefined;
+  /** Required by fx's trusted private profile. */
+  readonly requiredMode?: 0o600;
 }
 
 /** The exact staged file retained through publication, verification and recovery. */
@@ -79,11 +82,13 @@ export class ClientConfigurationPublication {
     path: string,
     contents: string,
     previous: string | undefined,
-    mode?: number,
     selection?: ClientConfigurationSelection,
   ): Promise<ClientConfigurationPublication> {
     const parent = await realpath(dirname(path));
-    const destination = join(parent, basename(path));
+    // Retain the transaction owner's directory requirement through final-file
+    // publication rather than allowing basename/join to select a regular file.
+    const destination =
+      join(parent, basename(path)) + (path.endsWith(sep) ? sep : "");
     const input = await selectedConfiguration(destination, previous);
     if (selection !== undefined) {
       await assertRequestedConfigurationPath(path, selection.requestedPath);
@@ -115,7 +120,21 @@ export class ClientConfigurationPublication {
       );
       staging.setFile(owner);
       await owner.handle.writeFile(contents, { encoding: "utf8" });
-      await preserveConfigurationAttributes(owner, input, mode, destination);
+      await preserveConfigurationAttributes(owner, input, destination);
+      if (selection?.requiredMode !== undefined) {
+        await owner.handle.chmod(selection.requiredMode);
+        if (
+          process.platform !== "win32" &&
+          ((await owner.handle.stat()).mode & 0o777) !== selection.requiredMode
+        )
+          throw new ClientConfigurationWriteError(
+            destination,
+            "preserve_mode",
+            new Error(
+              "The required private profile mode could not be verified",
+            ),
+          );
+      }
       await owner.handle.sync();
       if ((await owner.handle.stat()).ino === 0)
         throw new RegularFileChangedError(stagedPath);
@@ -168,12 +187,12 @@ export class ClientConfigurationPublication {
     return outcome.value;
   }
 
-  async assertCurrent(readback?: string): Promise<void> {
+  async assertCurrent(readback: string): Promise<void> {
     const owned = await this.owner.handle.stat();
     const named = await lstat(this.path);
     if (
       owned.ino === 0 ||
-      (readback !== undefined && readback !== this.contents) ||
+      readback !== this.contents ||
       named.isSymbolicLink() ||
       !sameRegularFileState(owned, named)
     )
@@ -223,7 +242,6 @@ export class ClientConfigurationPublication {
 const preserveConfigurationAttributes = async (
   owner: OwnedFileHandle,
   input: Stats | undefined,
-  mode: number | undefined,
   destination: string,
 ): Promise<void> => {
   const created = await owner.handle.stat();
@@ -246,7 +264,7 @@ const preserveConfigurationAttributes = async (
     }
   }
   try {
-    await owner.handle.chmod(mode ?? (input?.mode ?? 0o600) & 0o7777);
+    await owner.handle.chmod((input?.mode ?? 0o600) & 0o7777);
   } catch (cause: unknown) {
     throw new ClientConfigurationWriteError(
       destination,
@@ -290,10 +308,10 @@ const isParentAliasRetarget = async (
     );
   }
   if (requestedStats.isSymbolicLink()) return false;
-  const requestedParent = dirname(resolve(requestedPath));
+  const requestedParent = dirname(absoluteCallerPath(requestedPath));
   try {
     const canonicalParent = await realpath(requestedParent);
-    return resolve(canonicalParent) !== requestedParent;
+    return canonicalParent !== requestedParent;
   } catch (cause: unknown) {
     void cause;
     return false;

@@ -1,3 +1,4 @@
+import type { CdpContextFrameClaim } from "./CdpScriptContextFacts.js";
 import type { AsarHeaderAdmission } from "../config/asarHeaderAdmission.js";
 import { digestCanonicalValue } from "../domain/canonicalDigest.js";
 import type { ProgressReporter } from "../application/ProgressReporter.js";
@@ -25,6 +26,11 @@ import {
   snapshotDocuments,
   walkFrameTrees,
 } from "./CdpCaptureDocuments.js";
+import {
+  cdpFrameRecordFacts,
+  cdpFrameEventFacts,
+  type CdpFrameFacts,
+} from "./CdpFrameIdentity.js";
 import { snapshotDocumentNodes, snapshotNodeAt } from "./CdpSnapshotNodes.js";
 import { cdpSnapshotString } from "./CdpSnapshotStrings.js";
 import {
@@ -56,15 +62,17 @@ interface ElectronInspectionState {
   readonly completeness: CdpCaptureCompleteness;
   readonly scripts: ElectronScriptDraft[];
   readonly scriptMetadataRetention: ElectronScriptMetadataRetention;
-  readonly executionContextFrames: Map<string, string>;
+  readonly executionContextFrames: Map<string, CdpContextFrameClaim>;
   readonly frameGenerations: Map<string, number>;
   readonly frameParents: Map<string, string | null>;
   readonly frameDocuments: Map<string, ElectronFrameDocument>;
+  readonly unknownDocumentFrames: Set<string>;
   readonly authorizedFrameGenerations: Set<string>;
   readonly excludedFrameGenerations: Set<string>;
   readonly scriptGenerations: WeakMap<ElectronScriptDraft, number>;
   readonly limitations: string[];
   mainFrameId: string | undefined;
+  lastProvenMainDocument: ElectronFrameDocument | undefined;
   navigationDuringCapture: boolean;
 }
 
@@ -75,6 +83,7 @@ interface ElectronFrameInventory {
 }
 
 interface ElectronFrameRead extends ElectronFrameInventory {
+  readonly unprovenDocuments: ReadonlySet<string>;
   readonly generations: ReadonlyMap<string, number>;
 }
 
@@ -96,6 +105,7 @@ export const inspectCdpElectronPage = async (
     frameGenerations: new Map(),
     frameParents: new Map(),
     frameDocuments: new Map(),
+    unknownDocumentFrames: new Set(),
     authorizedFrameGenerations: new Set(),
     excludedFrameGenerations: new Set(),
     scriptGenerations: new WeakMap(),
@@ -108,11 +118,12 @@ export const inspectCdpElectronPage = async (
       "Known script frame identity is retained independently from frame_scope authorization. Unknown frame scope is attach-limited; scripts from known excluded document generations are omitted before source reads.",
       ...(context.target.attached === null
         ? [
-            "CDP discovery omitted the target attachment state; attached is reported as unknown.",
+            "CDP discovery could not establish the target's debugger attachment state.",
           ]
         : []),
     ],
     mainFrameId: undefined,
+    lastProvenMainDocument: undefined,
     navigationDuringCapture: false,
   };
   const removeListener = context.connection.onEvent((event) => {
@@ -154,9 +165,13 @@ const runElectronInspection = async (
   const main = initialFrames.at(0);
   if (main === undefined)
     throw new BrowserObservationError("inspect_web_page", "target_not_allowed");
-  if (unprovenFrameIds(initialRead, state).has(main.frame_id))
+  if (
+    !initialRead.unprovenDocuments.has(main.frame_id) &&
+    unprovenFrameIds(initialRead, state).has(main.frame_id)
+  )
     throw new BrowserObservationError("inspect_web_page", "target_changed");
   state.mainFrameId = main.frame_id;
+  state.lastProvenMainDocument = state.frameDocuments.get(main.frame_id);
   authorizeFrameGenerations(initialRead, state);
   await enableElectronCapture(context);
   await delayWithCancellation(
@@ -234,6 +249,13 @@ const authorizeFrameGenerations = (
   state: ElectronInspectionState,
 ): void => {
   const unproven = markUnstableFrameRead(read, state);
+  // Never let a later authorization retroactively bless facts from an
+  // unproven generation, including descendants of an unknown document.
+  for (const id of unproven) {
+    const generation = state.frameGenerations.get(id) ?? 0;
+    if ((read.generations.get(id) ?? 0) === generation)
+      state.frameGenerations.set(id, generation + 1);
+  }
   for (const [id, parent] of read.parents)
     if (!unproven.has(id)) state.frameParents.set(id, parent);
   for (const frame of read.frames) {
@@ -256,7 +278,7 @@ const unprovenFrameIds = (
   state: ElectronInspectionState,
 ): Set<string> => {
   const children = new Map<string, string[]>();
-  const unproven = new Set<string>();
+  const unproven = new Set(read.unprovenDocuments);
   for (const [id, parent] of read.parents) {
     if (
       (read.generations.get(id) ?? 0) !== (state.frameGenerations.get(id) ?? 0)
@@ -286,16 +308,16 @@ const advanceFrameGeneration = (
   event: CdpEvent,
   state: ElectronInspectionState,
 ): void => {
+  const facts = cdpFrameEventFacts(event);
   // A same-document event changes the cached identity, never its generation
   // or authority. Later full-frame replay must compare with that current URL.
   if (event.method === "Page.navigatedWithinDocument") {
-    const params = recordValue(event.params);
-    const id = cdpStringValue(params?.frameId);
-    if (id === undefined) return;
+    const id = facts.frameId;
+    if (id === null) return;
     if (id === state.mainFrameId) state.navigationDuringCapture = true;
     const previous = state.frameDocuments.get(id);
     if (previous === undefined) return;
-    const url = cdpFrameUrl(params);
+    const url = cdpFrameUrl(facts.source);
     if (url === undefined || url === "") state.frameDocuments.delete(id);
     else state.frameDocuments.set(id, { ...previous, url });
     return;
@@ -308,15 +330,10 @@ const advanceFrameGeneration = (
     ].includes(event.method)
   )
     return;
-  const params = recordValue(event.params);
-  const frame =
-    event.method === "Page.frameNavigated"
-      ? recordValue(params?.frame)
-      : params;
-  const id = cdpStringValue(frame?.id) ?? cdpStringValue(frame?.frameId);
-  if (id === undefined) return;
+  const id = facts.frameId;
+  if (id === null) return;
   const document =
-    event.method === "Page.frameNavigated" ? frameDocument(frame) : undefined;
+    facts.kind === "navigated" ? frameDocument(facts) : undefined;
   const previous = state.frameDocuments.get(id);
   if (
     document !== undefined &&
@@ -327,9 +344,9 @@ const advanceFrameGeneration = (
     return;
   invalidateFrameGenerations(id, state);
   // Event ancestry only invalidates future facts; it never authorizes a frame.
-  const parent =
-    cdpStringValue(frame?.parentId) ?? cdpStringValue(frame?.parentFrameId);
-  if (parent !== undefined && parent !== "") state.frameParents.set(id, parent);
+  const parent = facts.parentId;
+  if (facts.parentRelation === "child" && parent !== null)
+    state.frameParents.set(id, parent);
   else state.frameParents.delete(id);
   if (document !== undefined) retainFrameDocument(id, document, state);
 };
@@ -347,13 +364,17 @@ const retainFrameDocument = (
   document: ElectronFrameDocument,
   state: ElectronInspectionState,
 ): void => {
-  const previous = state.frameDocuments.get(id);
+  const previous =
+    state.frameDocuments.get(id) ??
+    (id === state.mainFrameId ? state.lastProvenMainDocument : undefined);
   if (
     previous !== undefined &&
     sameFrameDocument(previous, document) &&
     previous.url === document.url
-  )
+  ) {
+    state.frameDocuments.set(id, document);
     return;
+  }
   if (
     id === state.mainFrameId &&
     previous !== undefined &&
@@ -361,12 +382,14 @@ const retainFrameDocument = (
   )
     state.navigationDuringCapture = true;
   state.frameDocuments.set(id, document);
+  if (id === state.mainFrameId) state.lastProvenMainDocument = document;
 };
 
 /** Tree and event observations invalidate the same document generation. */
 const invalidateFrameGenerations = (
   id: string,
   state: ElectronInspectionState,
+  identity: "changed" | "unproven" = "changed",
 ): void => {
   const pending = [id];
   const changed = new Set<string>();
@@ -374,7 +397,8 @@ const invalidateFrameGenerations = (
     const current = pending.pop();
     if (current === undefined || changed.has(current)) continue;
     changed.add(current);
-    if (current === state.mainFrameId) state.navigationDuringCapture = true;
+    if (identity === "changed" && current === state.mainFrameId)
+      state.navigationDuringCapture = true;
     state.frameGenerations.set(
       current,
       (state.frameGenerations.get(current) ?? 0) + 1,
@@ -387,23 +411,19 @@ const invalidateFrameGenerations = (
 
 /** Only a known URL and loader together can prove a duplicate document event. */
 const frameDocument = (
-  frame: ReturnType<typeof recordValue>,
+  facts: CdpFrameFacts,
 ): ElectronFrameDocument | undefined => {
-  const url = cdpFrameUrl(frame);
-  const loaderId = cdpStringValue(frame?.loaderId);
+  const url = cdpFrameUrl(facts.source);
   if (
     url === undefined ||
     url === "" ||
-    loaderId === undefined ||
-    loaderId === ""
+    facts.loaderId === undefined ||
+    facts.loaderId === "" ||
+    facts.loaderIssue !== null ||
+    (facts.parentRelation !== "root" && facts.parentRelation !== "child")
   )
     return undefined;
-  if (
-    frame?.parentId !== undefined &&
-    (cdpStringValue(frame.parentId) === undefined || frame.parentId === "")
-  )
-    return undefined;
-  return { url, loaderId, parentId: cdpStringValue(frame?.parentId) ?? null };
+  return { url, loaderId: facts.loaderId, parentId: facts.parentId };
 };
 
 /** Protocol identities are observations, separate from asynchronous file authorization. */
@@ -412,27 +432,58 @@ const seedFrameDocuments = (
   generations: ReadonlyMap<string, number>,
   documents: ReadonlyMap<string, ElectronFrameDocument>,
   state: ElectronInspectionState,
-): void => {
+): Set<string> => {
+  const unproven = new Set<string>();
   const tree = recordValue(recordValue(result)?.frameTree);
-  if (tree === undefined) return;
+  if (tree === undefined) return unproven;
   for (const entry of walkFrameTrees(tree)) {
-    const frame = recordValue(entry.frame);
-    const id = cdpStringValue(frame?.id);
-    const document = frameDocument(frame);
+    const facts = cdpFrameRecordFacts(recordValue(entry.frame));
+    const id = facts.frameId;
+    const document = frameDocument(facts);
     if (
-      id !== undefined &&
+      id !== null &&
+      document === undefined &&
+      state.frameDocuments.get(id) === documents.get(id) &&
+      (generations.get(id) ?? 0) === (state.frameGenerations.get(id) ?? 0)
+    ) {
+      unproven.add(id);
+      state.unknownDocumentFrames.add(id);
+      if (documents.has(id)) invalidateFrameGenerations(id, state, "unproven");
+    }
+    if (
+      id !== null &&
+      document !== undefined &&
+      state.unknownDocumentFrames.has(id) &&
+      state.frameDocuments.get(id) === documents.get(id) &&
+      (generations.get(id) ?? 0) === (state.frameGenerations.get(id) ?? 0)
+    ) {
+      state.unknownDocumentFrames.delete(id);
+      const previous =
+        id === state.mainFrameId ? state.lastProvenMainDocument : undefined;
+      const changed =
+        previous !== undefined && !sameFrameDocument(previous, document);
+      invalidateFrameGenerations(id, state, changed ? "changed" : "unproven");
+      unproven.add(id);
+      retainFrameDocument(id, document, state);
+      continue;
+    }
+    if (
+      id !== null &&
       document !== undefined &&
       // A same-document event can update identity without changing generation.
       // Do not overwrite that newer observation with this in-flight tree.
       state.frameDocuments.get(id) === documents.get(id) &&
       (generations.get(id) ?? 0) === (state.frameGenerations.get(id) ?? 0)
     ) {
-      const previous = documents.get(id);
+      const previous =
+        documents.get(id) ??
+        (id === state.mainFrameId ? state.lastProvenMainDocument : undefined);
       if (previous !== undefined && !sameFrameDocument(previous, document))
         invalidateFrameGenerations(id, state);
       retainFrameDocument(id, document, state);
     }
   }
+  return unproven;
 };
 
 const authorizeInitialFrames = async (
@@ -465,17 +516,20 @@ const readCurrentFrames = async (
     context.sessionId,
     context.signal,
   );
-  seedFrameDocuments(result, generations, documents, state);
+  const unprovenDocuments = seedFrameDocuments(
+    result,
+    generations,
+    documents,
+    state,
+  );
   const inventory = await captureFrames(
     result,
     completeness,
     context.asarHeaderAdmission,
     context.signal,
   );
-  const main = inventory.frames[0];
-  if (main === undefined || inventory.parents.get(main.frame_id) !== null)
-    throw new BrowserObservationError("inspect_web_page", "target_not_allowed");
-  return { ...inventory, generations };
+  selectedMainFrame(inventory, state.mainFrameId);
+  return { ...inventory, generations, unprovenDocuments };
 };
 
 const markUnstableFrameRead = (
@@ -566,17 +620,12 @@ const assertStableMainFrame = async (
     context.sessionId,
     context.signal,
   );
-  seedFrameDocuments(result, generations, documents, state);
-  const afterPath = await mainFilePath(
+  const unprovenDocuments = seedFrameDocuments(
     result,
-    context.asarHeaderAdmission,
-    context.signal,
+    generations,
+    documents,
+    state,
   );
-
-  if (afterPath === undefined)
-    throw new BrowserObservationError("inspect_web_page", "target_not_allowed");
-  if (state.navigationDuringCapture || afterPath !== expectedPath)
-    throw new BrowserObservationError("inspect_web_page", "target_changed");
   const completeness = new CdpCaptureCompleteness();
   const inventory = await captureFrames(
     result,
@@ -585,14 +634,20 @@ const assertStableMainFrame = async (
     context.signal,
   );
   const { frames } = inventory;
+  const main = selectedMainFrame(inventory, state.mainFrameId);
   if (
+    main.file_path !== expectedPath ||
     state.navigationDuringCapture ||
     (state.mainFrameId !== undefined &&
+      !unprovenDocuments.has(state.mainFrameId) &&
       (generations.get(state.mainFrameId) ?? 0) !==
         (state.frameGenerations.get(state.mainFrameId) ?? 0))
   )
     throw new BrowserObservationError("inspect_web_page", "target_changed");
-  markUnstableFrameRead({ ...inventory, generations }, state);
+  markUnstableFrameRead(
+    { ...inventory, generations, unprovenDocuments },
+    state,
+  );
   if (
     completeness
       .snapshot()
@@ -625,24 +680,19 @@ export const captureFrames = async (
   )) {
     throwIfElectronInspectionCancelled(signal);
     const frame = recordValue(tree.frame);
-    const frameId = cdpStringValue(frame?.id);
-    const parentId = cdpStringValue(frame?.parentId);
+    const facts = cdpFrameRecordFacts(frame);
+    const frameId = facts.frameId;
+    const parentId = facts.parentId;
     // Only the enclosing tree root may omit its parent. Children must agree
     // with a structurally proved enclosing frame, independent of its file policy.
     // Malformed ancestry cannot grant proof to a frame or its descendants.
     const ancestryKnown =
       tree === frameTree
-        ? frame !== undefined && !Object.hasOwn(frame, "parentId")
-        : parentId !== undefined &&
-          parentId !== "" &&
-          parentId !== frameId &&
+        ? facts.parentRelation === "root"
+        : facts.parentRelation === "child" &&
+          parentId !== null &&
           parentId === enclosingParents.get(tree);
-    if (
-      frame === undefined ||
-      frameId === undefined ||
-      frameId === "" ||
-      !ancestryKnown
-    ) {
+    if (frame === undefined || frameId === null || !ancestryKnown) {
       completeness.exclude("frames", "invalid_protocol_value");
       continue;
     }
@@ -724,6 +774,7 @@ const captureDom = async (
   context: ElectronContext,
   completeness: CdpCaptureCompleteness,
 ): Promise<ElectronPageInspection["dom"]> => {
+  const nodeValueLengthUnit = "utf8-bytes";
   const result = requiredRecord(
     await context.connection.send(
       "DOMSnapshot.captureSnapshot",
@@ -736,7 +787,11 @@ const captureDom = async (
     completeness.exclude("dom", "invalid_protocol_value", count);
   if (!Array.isArray(result.strings)) {
     invalid(null);
-    return { total_nodes: 0, nodes: [] };
+    return {
+      total_nodes: 0,
+      node_value_length_unit: nodeValueLengthUnit,
+      nodes: [],
+    };
   }
   const strings = result.strings.map(cdpStringValue);
   const nodes: ElectronPageInspection["dom"]["nodes"] = [];
@@ -787,22 +842,24 @@ const captureDom = async (
       });
     }
   }
-  return { total_nodes: total, nodes };
+  return {
+    total_nodes: total,
+    node_value_length_unit: nodeValueLengthUnit,
+    nodes,
+  };
 };
 
-const mainFilePath = async (
-  result: unknown,
-  asarHeaderAdmission: AsarHeaderAdmission,
-  signal?: AbortSignal,
-): Promise<string | undefined> => {
-  const frameTree = recordValue(requiredRecord(result).frameTree);
-  const frame = recordValue(frameTree?.frame);
-  return await authorizedElectronFile(
-    cdpStringValue(frame?.url) ?? "",
-    signal,
-    "inspect_electron_page",
-    asarHeaderAdmission,
-  );
+/** Every tree read must retain the selected root independently of its URL. */
+const selectedMainFrame = (
+  inventory: ElectronFrameInventory,
+  selectedId: string | undefined,
+): ElectronPageInspection["frames"][number] => {
+  const main = inventory.frames[0];
+  if (main === undefined || inventory.parents.get(main.frame_id) !== null)
+    throw new BrowserObservationError("inspect_web_page", "target_not_allowed");
+  if (selectedId !== undefined && main.frame_id !== selectedId)
+    throw new BrowserObservationError("inspect_web_page", "target_changed");
+  return main;
 };
 
 const throwIfElectronInspectionCancelled = (signal?: AbortSignal): void => {

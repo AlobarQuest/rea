@@ -14,7 +14,7 @@ import { ArtifactResourceScope } from "../dist/artifacts/ArtifactResourceScope.j
 import { readGhidraLanguageCatalog } from "../dist/ghidra/GhidraLanguageCatalog.js";
 import { parseEvidence } from "../dist/domain/evidence.js";
 import { parseAnalysisSnapshot } from "../dist/domain/analysisSnapshot.js";
-import { functionDossierSchema } from "../dist/domain/hopperValues.js";
+import { functionDossierSchema } from "../dist/domain/native/functionDossier.js";
 import { inspectVerifierGhidraInstallation } from "./lib/ghidra-installation-inspection.mjs";
 import { buildGameCubeDolFixture } from "../tests/conformance/ghidra/dol-fixture.mjs";
 import {
@@ -115,9 +115,12 @@ async function runPass({ fixture, languageOverride, label, layout }) {
     stderr = (stderr + chunk.toString()).slice(-65536);
   });
   const call = async (name, args = {}) => {
-    const reply = await client.callTool({ name, arguments: args }, undefined, {
-      timeout: 180000,
-    });
+    const reply = await client.callTool(
+      { name, arguments: args },
+      {
+        timeout: 180000,
+      },
+    );
     return requireMcpOperationResult(reply, name);
   };
   const report = { label, language_override: languageOverride ?? null };
